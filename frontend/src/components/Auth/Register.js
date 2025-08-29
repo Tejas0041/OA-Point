@@ -126,60 +126,40 @@ const Register = () => {
             </div>
             
             <div>
-              <label htmlFor="role" className="block text-sm font-medium text-gray-700">
-                Role
+              <label htmlFor="registrationNumber" className="block text-sm font-medium text-gray-700">
+                Registration Number
               </label>
-              <select
-                id="role"
-                name="role"
-                className="input-field"
-                value={formData.role}
-                onChange={handleChange}
-              >
-                <option value="student">Student</option>
-                <option value="admin">Admin</option>
-              </select>
+              <div className="mt-1 relative">
+                <input
+                  id="registrationNumber"
+                  name="registrationNumber"
+                  type="text"
+                  className="input-field pl-10"
+                  placeholder="Enter your registration number"
+                  value={formData.registrationNumber}
+                  onChange={handleChange}
+                />
+                <Hash className="absolute left-3 top-2.5 h-5 w-5 text-gray-400" />
+              </div>
             </div>
             
-            {formData.role === 'student' && (
-              <>
-                <div>
-                  <label htmlFor="registrationNumber" className="block text-sm font-medium text-gray-700">
-                    Registration Number
-                  </label>
-                  <div className="mt-1 relative">
-                    <input
-                      id="registrationNumber"
-                      name="registrationNumber"
-                      type="text"
-                      className="input-field pl-10"
-                      placeholder="Enter your registration number"
-                      value={formData.registrationNumber}
-                      onChange={handleChange}
-                    />
-                    <Hash className="absolute left-3 top-2.5 h-5 w-5 text-gray-400" />
-                  </div>
-                </div>
-                
-                <div>
-                  <label htmlFor="phone" className="block text-sm font-medium text-gray-700">
-                    Phone Number
-                  </label>
-                  <div className="mt-1 relative">
-                    <input
-                      id="phone"
-                      name="phone"
-                      type="tel"
-                      className="input-field pl-10"
-                      placeholder="Enter your phone number"
-                      value={formData.phone}
-                      onChange={handleChange}
-                    />
-                    <Phone className="absolute left-3 top-2.5 h-5 w-5 text-gray-400" />
-                  </div>
-                </div>
-              </>
-            )}
+            <div>
+              <label htmlFor="phone" className="block text-sm font-medium text-gray-700">
+                Phone Number
+              </label>
+              <div className="mt-1 relative">
+                <input
+                  id="phone"
+                  name="phone"
+                  type="tel"
+                  className="input-field pl-10"
+                  placeholder="Enter your phone number"
+                  value={formData.phone}
+                  onChange={handleChange}
+                />
+                <Phone className="absolute left-3 top-2.5 h-5 w-5 text-gray-400" />
+              </div>
+            </div>
             
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-700">

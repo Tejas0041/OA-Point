@@ -11,7 +11,9 @@ import {
   Users,
   Clock,
   Trophy,
-  AlertTriangle
+  AlertTriangle,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 
 const TestResults = () => {
@@ -24,6 +26,9 @@ const TestResults = () => {
   const [loading, setLoading] = useState(true);
   const [sendingResults, setSendingResults] = useState(false);
   const [scoreFilter, setScoreFilter] = useState(null); // Current score filter
+  const [selectedViolations, setSelectedViolations] = useState(null);
+  const [showViolationsModal, setShowViolationsModal] = useState(false);
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
 
   useEffect(() => {
     fetchTestResults();
@@ -57,6 +62,10 @@ const TestResults = () => {
       // Clear filter if clicking the same range
       setScoreFilter(null);
       setResults(allResults);
+      // Reapply current sort if any
+      if (sortConfig.key) {
+        setTimeout(() => handleSort(sortConfig.key), 0);
+      }
       return;
     }
 
@@ -83,11 +92,19 @@ const TestResults = () => {
     });
     
     setResults(filtered);
+    // Reapply current sort if any
+    if (sortConfig.key) {
+      setTimeout(() => handleSort(sortConfig.key), 0);
+    }
   };
 
   const clearFilter = () => {
     setScoreFilter(null);
     setResults(allResults);
+    // Reapply current sort if any
+    if (sortConfig.key) {
+      setTimeout(() => handleSort(sortConfig.key), 0);
+    }
   };
 
   const sendResultsToStudents = async () => {
@@ -105,7 +122,7 @@ const TestResults = () => {
 
   const exportResults = () => {
     // Create CSV content
-    const headers = ['Name', 'Email', 'Registration Number', 'Score', 'Max Score', 'Percentage', 'Status', 'Submission Time'];
+    const headers = ['Name', 'Email', 'Registration Number', 'Score', 'Max Score', 'Percentage', 'Time Taken', 'Submission Time'];
     const csvContent = [
       headers.join(','),
       ...results.map(result => [
@@ -115,7 +132,7 @@ const TestResults = () => {
         result.totalScore,
         result.maxScore,
         result.percentage.toFixed(2) + '%',
-        result.isCompleted ? 'Completed' : 'Incomplete',
+        calculateTimeTaken(result.startTime, result.endTime),
         result.endTime ? new Date(result.endTime).toLocaleString() : 'N/A'
       ].join(','))
     ].join('\n');
@@ -136,6 +153,95 @@ const TestResults = () => {
     if (percentage >= 70) return 'text-yellow-600 bg-yellow-100';
     if (percentage >= 60) return 'text-orange-600 bg-orange-100';
     return 'text-red-600 bg-red-100';
+  };
+
+  const calculateTimeTaken = (startTime, endTime) => {
+    if (!startTime || !endTime) return 'N/A';
+    
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    const timeSpentMs = end - start;
+    const timeSpentMinutes = Math.floor(timeSpentMs / (1000 * 60));
+    const timeSpentSeconds = Math.floor((timeSpentMs % (1000 * 60)) / 1000);
+    
+    if (timeSpentMinutes >= 60) {
+      const hours = Math.floor(timeSpentMinutes / 60);
+      const minutes = timeSpentMinutes % 60;
+      return `${hours}h ${minutes}m`;
+    }
+    
+    return timeSpentSeconds > 0 ? `${timeSpentMinutes}m ${timeSpentSeconds}s` : `${timeSpentMinutes}m`;
+  };
+
+  const showViolations = (violations, studentName) => {
+    setSelectedViolations({ violations, studentName });
+    setShowViolationsModal(true);
+  };
+
+  const closeViolationsModal = () => {
+    setShowViolationsModal(false);
+    setSelectedViolations(null);
+  };
+
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+
+    const sortedResults = [...results].sort((a, b) => {
+      let aValue, bValue;
+
+      switch (key) {
+        case 'name':
+          aValue = a.studentId.name.toLowerCase();
+          bValue = b.studentId.name.toLowerCase();
+          break;
+        case 'score':
+          aValue = a.totalScore;
+          bValue = b.totalScore;
+          break;
+        case 'percentage':
+          aValue = a.percentage;
+          bValue = b.percentage;
+          break;
+        case 'timeTaken':
+          // Calculate time in minutes for sorting
+          const getTimeInMinutes = (startTime, endTime) => {
+            if (!startTime || !endTime) return 0;
+            return (new Date(endTime) - new Date(startTime)) / (1000 * 60);
+          };
+          aValue = getTimeInMinutes(a.startTime, a.endTime);
+          bValue = getTimeInMinutes(b.startTime, b.endTime);
+          break;
+        case 'submissionTime':
+          aValue = a.endTime ? new Date(a.endTime) : new Date(0);
+          bValue = b.endTime ? new Date(b.endTime) : new Date(0);
+          break;
+        default:
+          return 0;
+      }
+
+      if (aValue < bValue) {
+        return direction === 'asc' ? -1 : 1;
+      }
+      if (aValue > bValue) {
+        return direction === 'asc' ? 1 : -1;
+      }
+      return 0;
+    });
+
+    setResults(sortedResults);
+  };
+
+  const getSortIcon = (columnKey) => {
+    if (sortConfig.key !== columnKey) {
+      return <ChevronUp className="h-4 w-4 text-gray-400" />;
+    }
+    return sortConfig.direction === 'asc' 
+      ? <ChevronUp className="h-4 w-4 text-gray-600" />
+      : <ChevronDown className="h-4 w-4 text-gray-600" />;
   };
 
   if (loading) {
@@ -325,19 +431,49 @@ const TestResults = () => {
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Student
+                      <button
+                        onClick={() => handleSort('name')}
+                        className="flex items-center space-x-1 hover:text-gray-700 transition-colors"
+                      >
+                        <span>Student</span>
+                        {getSortIcon('name')}
+                      </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Score
+                      <button
+                        onClick={() => handleSort('score')}
+                        className="flex items-center space-x-1 hover:text-gray-700 transition-colors"
+                      >
+                        <span>Score</span>
+                        {getSortIcon('score')}
+                      </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Percentage
+                      <button
+                        onClick={() => handleSort('percentage')}
+                        className="flex items-center space-x-1 hover:text-gray-700 transition-colors"
+                      >
+                        <span>Percentage</span>
+                        {getSortIcon('percentage')}
+                      </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
+                      <button
+                        onClick={() => handleSort('timeTaken')}
+                        className="flex items-center space-x-1 hover:text-gray-700 transition-colors"
+                      >
+                        <span>Time Taken</span>
+                        {getSortIcon('timeTaken')}
+                      </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Submission Time
+                      <button
+                        onClick={() => handleSort('submissionTime')}
+                        className="flex items-center space-x-1 hover:text-gray-700 transition-colors"
+                      >
+                        <span>Submission Time</span>
+                        {getSortIcon('submissionTime')}
+                      </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Violations
@@ -372,14 +508,8 @@ const TestResults = () => {
                           {result.percentage.toFixed(1)}%
                         </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          result.isCompleted 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-yellow-100 text-yellow-800'
-                        }`}>
-                          {result.isCompleted ? 'Completed' : 'In Progress'}
-                        </span>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {calculateTimeTaken(result.startTime, result.endTime)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {result.endTime 
@@ -389,10 +519,13 @@ const TestResults = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         {result.violations && result.violations.length > 0 ? (
-                          <div className="flex items-center text-red-600">
+                          <button
+                            onClick={() => showViolations(result.violations, result.studentId.name)}
+                            className="flex items-center text-red-600 hover:text-red-800 hover:bg-red-50 px-2 py-1 rounded transition-colors"
+                          >
                             <AlertTriangle className="h-4 w-4 mr-1" />
                             <span className="text-sm">{result.violations.length}</span>
-                          </div>
+                          </button>
                         ) : (
                           <span className="text-sm text-gray-500">None</span>
                         )}
@@ -405,6 +538,72 @@ const TestResults = () => {
           )}
         </div>
       </div>
+
+      {/* Violations Modal */}
+      {showViolationsModal && selectedViolations && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Violations - {selectedViolations.studentName}
+                </h3>
+                <button
+                  onClick={closeViolationsModal}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              <div className="max-h-96 overflow-y-auto">
+                {selectedViolations.violations.length === 0 ? (
+                  <p className="text-gray-500 text-center py-4">No violations recorded</p>
+                ) : (
+                  <div className="space-y-4">
+                    {selectedViolations.violations.map((violation, index) => (
+                      <div key={index} className="border border-red-200 rounded-lg p-4 bg-red-50">
+                        <div className="flex items-start space-x-3">
+                          <AlertTriangle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+                          <div className="flex-1">
+                            <div className="flex items-center justify-between mb-2">
+                              <h4 className="text-sm font-medium text-red-800 capitalize">
+                                {violation.type.replace('-', ' ')}
+                              </h4>
+                              <span className="text-xs text-red-600">
+                                {new Date(violation.timestamp).toLocaleString()}
+                              </span>
+                            </div>
+                            <p className="text-sm text-red-700">
+                              {violation.description}
+                            </p>
+                            {violation.details && (
+                              <div className="mt-2 text-xs text-red-600 bg-red-100 p-2 rounded">
+                                <strong>Details:</strong> {violation.details}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              
+              <div className="mt-6 flex justify-end">
+                <button
+                  onClick={closeViolationsModal}
+                  className="btn-secondary"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

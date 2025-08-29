@@ -45,38 +45,122 @@ const TestInterface = () => {
   const [testStarted, setTestStarted] = useState(false)
   const [showSectionModal, setShowSectionModal] = useState(false)
   const [showSubmitModal, setShowSubmitModal] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Timer for section time
-  useEffect(() => {
-    if (testStarted && sectionTimeLeft > 0) {
-      const timer = setInterval(() => {
-        setSectionTimeLeft(prev => {
-          if (prev <= 1) {
-            handleSectionComplete()
-            return 0
-          }
-          return prev - 1
+  // Function declarations (moved before useEffect to avoid hoisting issues)
+  const submitAnswer = useCallback(
+    async (questionId, answer) => {
+      try {
+        await axios.post(API_ENDPOINTS.STUDENT_TEST_SUBMIT_ANSWER(testId), {
+          questionId,
+          sectionId: test?.sections[currentSection]?._id,
+          answer,
+          timeSpent: 0 // Calculate actual time spent
         })
-      }, 1000)
-      return () => clearInterval(timer)
-    }
-  }, [testStarted])
+      } catch (error) {
+        console.error('Error submitting answer:', error)
+      }
+    },
+    [testId, test, currentSection]
+  )
 
-  // Timer for overall test time
-  useEffect(() => {
-    if (testStarted && timeLeft > 0) {
-      const timer = setInterval(() => {
-        setTimeLeft(prev => {
-          if (prev <= 1) {
-            handleAutoSubmit()
-            return 0
-          }
-          return prev - 1
-        })
-      }, 1000)
-      return () => clearInterval(timer)
+  const handleTestSubmit = useCallback(async () => {
+    try {
+      // Set submitting state to show loader
+      setIsSubmitting(true)
+      
+      // Stop test monitoring to prevent warnings after submission
+      setTestStarted(false)
+
+      // Dismiss any existing fullscreen warnings
+      toast.dismiss('fullscreen-warning')
+
+      // First, ensure all current answers are submitted
+      console.log('Submitting final answers before test submission...')
+      const submitPromises = []
+
+      // Submit any unsaved answers
+      Object.keys(answers).forEach(questionId => {
+        const answer = answers[questionId]
+        if (answer) {
+          console.log('Submitting answer for question:', questionId, answer)
+          submitPromises.push(submitAnswer(questionId, answer))
+        }
+      })
+
+      // Wait for all answers to be submitted
+      if (submitPromises.length > 0) {
+        await Promise.all(submitPromises)
+        console.log('All answers submitted, waiting 1 second...')
+        // Give a small delay to ensure database writes complete
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+
+      console.log('Now submitting test...')
+      const response = await axios.post(
+        API_ENDPOINTS.STUDENT_TEST_SUBMIT(testId)
+      )
+      toast.success('Test submitted successfully')
+
+      // Exit fullscreen
+      if (document.fullscreenElement) {
+        document.exitFullscreen()
+      }
+
+      // Redirect to results page instead of dashboard
+      navigate(`/student/test/${testId}/results`, {
+        state: {
+          testCompleted: true,
+          score: response.data.score,
+          maxScore: response.data.maxScore
+        }
+      })
+    } catch (error) {
+      console.error('Error submitting test:', error)
+      toast.error('Failed to submit test')
+      setIsSubmitting(false) // Reset submitting state on error
     }
-  }, [handleAutoSubmit, testStarted, timeLeft])
+  }, [testId, answers, submitAnswer, navigate])
+
+  const handleAutoSubmit = useCallback(() => {
+    if (!isSubmitting) {
+      toast.error('Time is up! Auto-submitting test...')
+      handleTestSubmit()
+    }
+  }, [handleTestSubmit, isSubmitting])
+
+  const handleSectionComplete = useCallback(async () => {
+    if (isSubmitting) return // Prevent multiple submissions
+    
+    try {
+      await axios.post(API_ENDPOINTS.STUDENT_TEST_COMPLETE_SECTION(testId), {
+        sectionId: test.sections[currentSection]._id
+      })
+
+      if (currentSection < test.sections.length - 1) {
+        setCurrentSection(prev => prev + 1)
+        setCurrentQuestion(0)
+        setSectionTimeLeft(test.sections[currentSection + 1].timeLimit * 60)
+        toast.success('Section completed. Moving to next section.')
+      } else {
+        handleTestSubmit()
+      }
+    } catch (error) {
+      console.error('Error completing section:', error)
+      toast.error('Failed to complete section')
+    }
+  }, [testId, test, currentSection, handleTestSubmit, isSubmitting])
+
+  const reportViolation = useCallback(async (type, description) => {
+    try {
+      await axios.post(API_ENDPOINTS.STUDENT_TEST_REPORT_VIOLATION(testId), {
+        type,
+        description
+      })
+    } catch (error) {
+      console.error('Error reporting violation:', error)
+    }
+  }, [testId])
 
   // Effect for handling security measures
   useEffect(() => {
@@ -161,154 +245,24 @@ const TestInterface = () => {
         clearInterval(devToolsInterval)
       }
     }
-  }, [testStarted])
+  }, [reportViolation, testStarted])
 
-  useEffect(() => {
-    fetchTestDetails()
-    if (testStarted) {
-      setupEventListeners()
+  const calculateTimeLeft = useCallback((testData, attemptData) => {
+    const startTime = new Date(attemptData.startTime)
+    const now = new Date()
+    const elapsed = Math.floor((now - startTime) / 1000)
+    const totalTime = testData.duration * 60
+    setTimeLeft(Math.max(0, totalTime - elapsed))
+
+    // Calculate section time left
+    const currentSectionData = testData.sections[attemptData.currentSection]
+    if (currentSectionData) {
+      const sectionTime = currentSectionData.timeLimit * 60
+      setSectionTimeLeft(Math.max(0, sectionTime - elapsed))
     }
-    return () => {
-      if (testStarted) {
-        removeEventListeners()
-      }
-    }
-  }, [testId, testStarted])
+  }, [])
 
-  const setupEventListeners = () => {
-    if (testStarted) {
-      // Block ESC key and F11
-      const blockEsc = e => {
-        if (e.key === 'Escape' || e.key === 'F11') {
-          e.preventDefault()
-          e.stopPropagation()
-        }
-      }
-      document.addEventListener('keydown', blockEsc, true)
-
-      // Block developer tools shortcuts
-      const blockDevTools = e => {
-        if (
-          (e.ctrlKey &&
-            (e.key === 'I' ||
-              e.key === 'i' ||
-              e.key === 'J' ||
-              e.key === 'j' ||
-              e.key === 'U' ||
-              e.key === 'u')) ||
-          e.key === 'F12'
-        ) {
-          e.preventDefault()
-          e.stopPropagation()
-          toast.error('Developer tools are not allowed during the test')
-          reportViolation('dev-tools', 'Developer tools shortcut detected')
-        }
-      }
-      document.addEventListener('keydown', blockDevTools, true)
-
-      // Prevent right-click
-      document.addEventListener('contextmenu', preventRightClick)
-
-      // Prevent copy-paste
-      document.addEventListener('keydown', preventCopyPaste)
-
-      // Detect fullscreen changes
-      document.addEventListener('fullscreenchange', handleFullscreenChange)
-
-      // Detect tab switching
-      document.addEventListener('visibilitychange', handleVisibilityChange)
-
-      // Detect if devtools is open
-      const checkDevTools = () => {
-        const threshold = 160
-        const widthThreshold = window.outerWidth - window.innerWidth > threshold
-        const heightThreshold =
-          window.outerHeight - window.innerHeight > threshold
-
-        if (widthThreshold || heightThreshold) {
-          toast.error('Please close developer tools to continue the test')
-          reportViolation('dev-tools', 'Developer tools detected')
-        }
-      }
-
-      const devToolsInterval = setInterval(checkDevTools, 1000)
-
-      // Clean up function
-      return () => {
-        document.removeEventListener('keydown', blockEsc, true)
-        document.removeEventListener('keydown', blockDevTools, true)
-        document.removeEventListener('contextmenu', preventRightClick)
-        document.removeEventListener('keydown', preventCopyPaste)
-        document.removeEventListener('fullscreenchange', handleFullscreenChange)
-        document.removeEventListener('visibilitychange', handleVisibilityChange)
-        clearInterval(devToolsInterval)
-      }
-    }
-  }
-
-  const removeEventListeners = () => {
-    document.removeEventListener('contextmenu', preventRightClick)
-    document.removeEventListener('keydown', preventCopyPaste)
-    document.removeEventListener('fullscreenchange', handleFullscreenChange)
-    document.removeEventListener('visibilitychange', handleVisibilityChange)
-  }
-
-  const preventRightClick = e => {
-    if (testStarted) {
-      e.preventDefault()
-      reportViolation('right-click', 'Right-click attempted')
-    }
-  }
-
-  const preventCopyPaste = e => {
-    if (testStarted && (e.ctrlKey || e.metaKey)) {
-      if (e.key === 'c' || e.key === 'v' || e.key === 'x') {
-        e.preventDefault()
-        reportViolation(
-          'copy-paste',
-          `${e.key.toUpperCase()} key combination attempted`
-        )
-      }
-    }
-  }
-
-  const handleFullscreenChange = () => {
-    const isCurrentlyFullscreen = !!document.fullscreenElement
-    setIsFullscreen(isCurrentlyFullscreen)
-
-    if (testStarted) {
-      if (!isCurrentlyFullscreen) {
-        reportViolation('fullscreen-exit', 'Exited fullscreen mode')
-        toast.error('Please return to fullscreen mode to continue', {
-          duration: Infinity,
-          id: 'fullscreen-warning'
-        })
-      } else {
-        // Dismiss fullscreen warning when entering fullscreen
-        toast.dismiss('fullscreen-warning')
-      }
-    }
-  }
-
-  const handleVisibilityChange = () => {
-    if (testStarted && document.hidden) {
-      reportViolation('tab-switch', 'Switched to another tab/window')
-      toast.error('Tab switching detected')
-    }
-  }
-
-  const reportViolation = async (type, description) => {
-    try {
-      await axios.post(API_ENDPOINTS.STUDENT_TEST_REPORT_VIOLATION(testId), {
-        type,
-        description
-      })
-    } catch (error) {
-      console.error('Error reporting violation:', error)
-    }
-  }
-
-  const fetchTestDetails = async () => {
+  const fetchTestDetails = useCallback(async () => {
     try {
       const response = await axios.get(API_ENDPOINTS.STUDENT_TEST_BY_ID(testId))
       const testData = response.data.test
@@ -356,22 +310,182 @@ const TestInterface = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [testId, calculateTimeLeft])
 
-  const calculateTimeLeft = (testData, attemptData) => {
-    const startTime = new Date(attemptData.startTime)
-    const now = new Date()
-    const elapsed = Math.floor((now - startTime) / 1000)
-    const totalTime = testData.duration * 60
-    setTimeLeft(Math.max(0, totalTime - elapsed))
+  useEffect(() => {
+    fetchTestDetails()
+  }, [fetchTestDetails])
 
-    // Calculate section time left
-    const currentSectionData = testData.sections[attemptData.currentSection]
-    if (currentSectionData) {
-      const sectionTime = currentSectionData.timeLimit * 60
-      setSectionTimeLeft(Math.max(0, sectionTime - elapsed))
+  const removeEventListeners = useCallback(() => {
+    // Implementation will be added by event listeners setup
+  }, [])
+
+  const setupEventListeners = useCallback(() => {
+    if (testStarted) {
+      // Block ESC key and F11
+      const blockEsc = e => {
+        if (e.key === 'Eescape' || e.key === 'F11') {
+          e.preventDefault()
+          e.stopPropagation()
+        }
+      }
+      document.addEventListener('keydown', blockEsc, true)
+
+      // Block developer tools shortcuts
+      const blockDevTools = e => {
+        if (
+          (e.ctrlKey &&
+            (e.key === 'I' ||
+              e.key === 'i' ||
+              e.key === 'J' ||
+              e.key === 'j' ||
+              e.key === 'U' ||
+              e.key === 'u')) ||
+          e.key === 'F12'
+        ) {
+          e.preventDefault()
+          e.stopPropagation()
+          toast.error('Developer tools are not allowed during the test')
+          reportViolation('dev-tools', 'Developer tools shortcut detected')
+        }
+      }
+      document.addEventListener('keydown', blockDevTools, true)
+
+      // Prevent right-click
+      const preventRightClick = e => {
+        if (testStarted) {
+          e.preventDefault()
+          reportViolation('right-click', 'Right-click attempted')
+        }
+      }
+      document.addEventListener('contextmenu', preventRightClick)
+
+      // Prevent copy-paste
+      const preventCopyPaste = e => {
+        if (testStarted && (e.ctrlKey || e.metaKey)) {
+          if (e.key === 'c' || e.key === 'v' || e.key === 'x') {
+            e.preventDefault()
+            reportViolation(
+              'copy-paste',
+              `${e.key.toUpperCase()} key combination attempted`
+            )
+          }
+        }
+      }
+      document.addEventListener('keydown', preventCopyPaste)
+
+      // Detect fullscreen changes
+      const handleFullscreenChange = () => {
+        const isCurrentlyFullscreen = !!document.fullscreenElement
+        setIsFullscreen(isCurrentlyFullscreen)
+
+        if (testStarted) {
+          if (!isCurrentlyFullscreen) {
+            reportViolation('fullscreen-exit', 'Exited fullscreen mode')
+            toast.error('Please return to fullscreen mode to continue', {
+              duration: Infinity,
+              id: 'fullscreen-warning'
+            })
+          } else {
+            // Dismiss fullscreen warning when entering fullscreen
+            toast.dismiss('fullscreen-warning')
+          }
+        }
+      }
+      document.addEventListener('fullscreenchange', handleFullscreenChange)
+
+      // Detect tab switching
+      const handleVisibilityChange = () => {
+        if (testStarted && document.hidden) {
+          reportViolation('tab-switch', 'Switched to another tab/window')
+          toast.error('Tab switching detected')
+        }
+      }
+      document.addEventListener('visibilitychange', handleVisibilityChange)
+
+      // Detect if devtools is open
+      const checkDevTools = () => {
+        const threshold = 160
+        const widthThreshold = window.outerWidth - window.innerWidth > threshold
+        const heightThreshold =
+          window.outerHeight - window.innerHeight > threshold
+
+        if (widthThreshold || heightThreshold) {
+          toast.error('Please close developer tools to continue the test')
+          reportViolation('dev-tools', 'Developer tools detected')
+        }
+      }
+
+      const devToolsInterval = setInterval(checkDevTools, 1000)
+
+      // Clean up function
+      return () => {
+        document.removeEventListener('keydown', blockEsc, true)
+        document.removeEventListener('keydown', blockDevTools, true)
+        document.removeEventListener('contextmenu', preventRightClick)
+        document.removeEventListener('keydown', preventCopyPaste)
+        document.removeEventListener('fullscreenchange', handleFullscreenChange)
+        document.removeEventListener('visibilitychange', handleVisibilityChange)
+        clearInterval(devToolsInterval)
+      }
     }
-  }
+  }, [reportViolation, testStarted])
+
+  useEffect(() => {
+    if (testStarted) {
+      setupEventListeners()
+    }
+    return () => {
+      if (testStarted) {
+        removeEventListeners()
+      }
+    }
+  }, [removeEventListeners, setupEventListeners, testStarted])
+
+  // Timer countdown effect
+  useEffect(() => {
+    let timerInterval = null
+    
+    if (testStarted && (timeLeft > 0 || sectionTimeLeft > 0)) {
+      timerInterval = setInterval(() => {
+        // Update section time
+        setSectionTimeLeft(prev => {
+          if (prev <= 1 && !isSubmitting) {
+            // Section time is up, move to next section or submit test
+            if (currentSection < test.sections.length - 1) {
+              toast.error('Section time is up! Moving to next section...')
+              setTimeout(() => handleSectionComplete(), 1000)
+            } else {
+              toast.error('Test time is up! Auto-submitting...')
+              setTimeout(() => handleAutoSubmit(), 1000)
+            }
+            return 0
+          }
+          return prev - 1
+        })
+        
+        // Update total time
+        setTimeLeft(prev => {
+          if (prev <= 1 && !isSubmitting) {
+            toast.error('Test time is up! Auto-submitting...')
+            setTimeout(() => handleAutoSubmit(), 1000)
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+    }
+
+    return () => {
+      if (timerInterval) {
+        clearInterval(timerInterval)
+      }
+    }
+  }, [testStarted, timeLeft, sectionTimeLeft, currentSection, test, handleAutoSubmit, handleSectionComplete, isSubmitting])
+
+
+
+
 
   const startTest = async () => {
     try {
@@ -420,98 +534,6 @@ const TestInterface = () => {
       ...prev,
       [questionId]: answer
     }))
-  }
-
-  const submitAnswer = async (questionId, answer) => {
-    try {
-      await axios.post(API_ENDPOINTS.STUDENT_TEST_SUBMIT_ANSWER(testId), {
-        questionId,
-        sectionId: test.sections[currentSection]._id,
-        answer,
-        timeSpent: 0 // Calculate actual time spent
-      })
-    } catch (error) {
-      console.error('Error submitting answer:', error)
-    }
-  }
-
-  const handleSectionComplete = async () => {
-    try {
-      await axios.post(API_ENDPOINTS.STUDENT_TEST_COMPLETE_SECTION(testId), {
-        sectionId: test.sections[currentSection]._id
-      })
-
-      if (currentSection < test.sections.length - 1) {
-        setCurrentSection(prev => prev + 1)
-        setCurrentQuestion(0)
-        setSectionTimeLeft(test.sections[currentSection + 1].timeLimit * 60)
-        toast.success('Section completed. Moving to next section.')
-      } else {
-        handleTestSubmit()
-      }
-    } catch (error) {
-      console.error('Error completing section:', error)
-      toast.error('Failed to complete section')
-    }
-  }
-
-  const handleTestSubmit = async () => {
-    try {
-      // Stop test monitoring to prevent warnings after submission
-      setTestStarted(false)
-
-      // Dismiss any existing fullscreen warnings
-      toast.dismiss('fullscreen-warning')
-
-      // First, ensure all current answers are submitted
-      console.log('Submitting final answers before test submission...')
-      const submitPromises = []
-
-      // Submit any unsaved answers
-      Object.keys(answers).forEach(questionId => {
-        const answer = answers[questionId]
-        if (answer) {
-          console.log('Submitting answer for question:', questionId, answer)
-          submitPromises.push(submitAnswer(questionId, answer))
-        }
-      })
-
-      // Wait for all answers to be submitted
-      if (submitPromises.length > 0) {
-        await Promise.all(submitPromises)
-        console.log('All answers submitted, waiting 1 second...')
-        // Give a small delay to ensure database writes complete
-        await new Promise(resolve => setTimeout(resolve, 1000))
-      }
-
-      console.log('Now submitting test...')
-      const response = await axios.post(
-        API_ENDPOINTS.STUDENT_TEST_SUBMIT(testId)
-      )
-      toast.success('Test submitted successfully')
-
-      // Exit fullscreen
-      if (document.fullscreenElement) {
-        document.exitFullscreen()
-      }
-
-      // Redirect to results page instead of dashboard
-      navigate(`/student/test/${testId}/results`, {
-        state: {
-          testCompleted: true,
-          score: response.data.score,
-          maxScore: response.data.maxScore
-        }
-      })
-    } catch (error) {
-      console.error('Error submitting test:', error)
-      toast.error('Failed to submit test')
-    }
-  }
-
-  const handleAutoSubmit = () => {
-    toast.error('Time is up! Auto-submitting test...')
-    handleTestSubmit()
   }
 
   const runCode = async () => {
@@ -766,8 +788,21 @@ const TestInterface = () => {
       </div>
     )
   }
-
+  
   if (!testStarted) {
+    // Show loading screen during submission
+    if (isSubmitting) {
+      return (
+        <div className='min-h-screen flex items-center justify-center bg-gray-50'>
+          <div className='text-center'>
+            <div className='animate-spin rounded-full h-16 w-16 border-b-2 border-primary-600 mx-auto mb-4'></div>
+            <h2 className='text-xl font-semibold text-gray-900 mb-2'>Submitting Test...</h2>
+            <p className='text-gray-600'>Please wait while we process your submission</p>
+          </div>
+        </div>
+      )
+    }
+    
     return (
       <div className='min-h-screen flex items-center justify-center bg-gray-50'>
         <div className='max-w-2xl mx-auto p-8 bg-white rounded-lg shadow-lg'>
@@ -979,15 +1014,7 @@ const TestInterface = () => {
                   </button>
                 ) : (
                   <button
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          'Are you sure you want to move to the next section? You cannot return to this section once you proceed.'
-                        )
-                      ) {
-                        handleSectionComplete()
-                      }
-                    }}
+                    onClick={() => setShowSectionModal(true)}
                     className='btn-primary'
                   >
                     Next Section

@@ -830,7 +830,7 @@ router.get('/tests/:id/results', adminAuth, async (req, res) => {
   }
 })
 
-// Send results to students
+// Send overall test results (leaderboard) to all students
 router.post('/tests/:id/send-results', adminAuth, async (req, res) => {
   try {
     const test = await Test.findOne({
@@ -842,18 +842,68 @@ router.post('/tests/:id/send-results', adminAuth, async (req, res) => {
       return res.status(404).json({ message: 'Test not found' })
     }
 
-    const results = await TestAttempt.find({ testId: req.params.id }).populate(
-      'studentId',
-      'name email registrationNumber'
-    )
+    // Get all results sorted by score (high to low)
+    const allResults = await TestAttempt.find({ testId: req.params.id })
+      .populate('studentId', 'name email registrationNumber')
+      .sort({ totalScore: -1, percentage: -1 })
 
-    const emailPromises = results.map(result => {
+    if (allResults.length === 0) {
+      return res.status(400).json({ message: 'No results found for this test' })
+    }
+
+    // Get all students who were invited to this test
+    const allowedStudents = await User.find({
+      _id: { $in: test.allowedStudents },
+      role: 'student'
+    })
+
+    // Create leaderboard HTML
+    const createLeaderboardHTML = () => {
+      let leaderboardRows = ''
+      
+      allResults.forEach((result, index) => {
+        const rank = index + 1
+        const medalIcon = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`
+        const rowColor = rank <= 3 ? '#fef3c7' : index % 2 === 0 ? '#f9fafb' : '#ffffff'
+        
+        leaderboardRows += `
+          <tr style="background-color: ${rowColor};">
+            <td style="padding: 12px; text-align: center; font-weight: 600; color: #1f2937;">${medalIcon}</td>
+            <td style="padding: 12px; color: #1f2937; font-weight: 500;">${result.studentId.name}</td>
+            <td style="padding: 12px; text-align: center; color: #1f2937; font-weight: 600;">${result.totalScore}/${result.maxScore}</td>
+            <td style="padding: 12px; text-align: center; color: ${
+              result.percentage >= 70 ? '#10b981' : result.percentage >= 50 ? '#f59e0b' : '#ef4444'
+            }; font-weight: 700;">${result.percentage.toFixed(1)}%</td>
+          </tr>
+        `
+      })
+      
+      return leaderboardRows
+    }
+
+    // Calculate statistics
+    const totalParticipants = allResults.length
+    const averageScore = allResults.reduce((sum, result) => sum + result.percentage, 0) / totalParticipants
+    const highestScore = allResults[0]?.percentage || 0
+    const lowestScore = allResults[allResults.length - 1]?.percentage || 0
+
+    // Send email to all allowed students
+    const emailPromises = allowedStudents.map(student => {
+      // Find student's result if they participated
+      const studentResult = allResults.find(result => 
+        result.studentId._id.toString() === student._id.toString()
+      )
+      
+      const studentRank = studentResult ? 
+        allResults.findIndex(result => result.studentId._id.toString() === student._id.toString()) + 1 : 
+        null
+
       const mailOptions = {
         from: `"OA Point Team" <${process.env.EMAIL_USER}>`,
-        to: result.studentId.email,
-        subject: `OA Point - Assessment Results: ${test.title}`,
+        to: student.email,
+        subject: `OA Point - Test Results & Leaderboard: ${test.title}`,
         html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+          <div style="font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
             <div style="padding: 25px; text-align: center; background: white; border-bottom: 1px solid #e5e7eb;">
               <img src="https://drive.google.com/file/d/1FQR1s8JZvJcBbdvg3m2TNv0rpIOcqJvK/view?usp=sharing" alt="OA Point Logo" style="height: 60px; width: auto; margin-bottom: 15px;" />
               <h1 style="color: #333; margin: 0; font-size: 28px; font-weight: bold;">OA Point</h1>
@@ -861,95 +911,96 @@ router.post('/tests/:id/send-results', adminAuth, async (req, res) => {
             </div>
             
             <div style="padding: 35px 30px; background-color: #f8f9fa;">
-              <h2 style="color: #333; margin-bottom: 25px; font-size: 24px; font-weight: 600; text-align: center;">📊 Assessment Results</h2>
+              <h2 style="color: #333; margin-bottom: 25px; font-size: 24px; font-weight: 600; text-align: center;">🏆 Test Results & Leaderboard</h2>
               
-              <p style="font-size: 18px; color: #333; margin-bottom: 25px;">Dear <strong>${
-                result.studentId.name
-              }</strong>,</p>
+              <p style="font-size: 18px; color: #333; margin-bottom: 25px;">Dear <strong>${student.name}</strong>,</p>
               
               <p style="font-size: 16px; color: #374151; line-height: 1.6; margin-bottom: 25px;">
-                Your results for the assessment "<strong>${
-                  test.title
-                }</strong>" are now available on <strong>OA Point</strong>.
+                The results for "<strong>${test.title}</strong>" are now available. Here's the complete leaderboard showing all participants' performance.
               </p>
-              
-              <div style="background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-left: 4px solid ${
-                result.percentage >= 70
-                  ? '#10b981'
-                  : result.percentage >= 50
-                  ? '#f59e0b'
-                  : '#ef4444'
-              }; margin-bottom: 25px;">
-                <h3 style="color: #333; margin-bottom: 20px; font-size: 20px;">🎯 Your Performance</h3>
-                <div style="display: grid; gap: 12px;">
-                  <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f3f4f6;">
-                    <span style="color: #374151; font-weight: 500;">Total Score:</span>
-                    <span style="color: #1f2937; font-weight: 600;">${
-                      result.totalScore
-                    } / ${result.maxScore}</span>
+
+              ${studentResult ? `
+                <div style="background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-left: 4px solid ${
+                  studentResult.percentage >= 70 ? '#10b981' : studentResult.percentage >= 50 ? '#f59e0b' : '#ef4444'
+                }; margin-bottom: 25px;">
+                  <h3 style="color: #333; margin-bottom: 20px; font-size: 20px;">🎯 Your Performance</h3>
+                  <div style="display: grid; gap: 12px;">
+                    <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f3f4f6;">
+                      <span style="color: #374151; font-weight: 500;">Your Rank:</span>
+                      <span style="color: #1f2937; font-weight: 700; font-size: 18px;">${studentRank}${studentRank === 1 ? ' 🥇' : studentRank === 2 ? ' 🥈' : studentRank === 3 ? ' 🥉' : ''} out of ${totalParticipants}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f3f4f6;">
+                      <span style="color: #374151; font-weight: 500;">Your Score:</span>
+                      <span style="color: #1f2937; font-weight: 600;">${studentResult.totalScore}/${studentResult.maxScore}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; padding: 8px 0;">
+                      <span style="color: #374151; font-weight: 500;">Your Percentage:</span>
+                      <span style="color: ${
+                        studentResult.percentage >= 70 ? '#10b981' : studentResult.percentage >= 50 ? '#f59e0b' : '#ef4444'
+                      }; font-weight: 700; font-size: 18px;">${studentResult.percentage.toFixed(1)}%</span>
+                    </div>
                   </div>
-                  <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f3f4f6;">
-                    <span style="color: #374151; font-weight: 500;">Percentage:</span>
-                    <span style="color: ${
-                      result.percentage >= 70
-                        ? '#10b981'
-                        : result.percentage >= 50
-                        ? '#f59e0b'
-                        : '#ef4444'
-                    }; font-weight: 700; font-size: 18px;">${result.percentage.toFixed(
-          2
-        )}%</span>
+                </div>
+              ` : `
+                <div style="background: #fef3c7; padding: 20px; border-radius: 8px; border-left: 4px solid #f59e0b; margin-bottom: 25px;">
+                  <p style="margin: 0; color: #92400e; font-weight: 500;">
+                    📝 You did not participate in this assessment, but you can still view the overall results below.
+                  </p>
+                </div>
+              `}
+
+              <div style="background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 25px;">
+                <h3 style="color: #333; margin-bottom: 20px; font-size: 20px;">📊 Test Statistics</h3>
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
+                  <div style="text-align: center; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                    <div style="font-size: 24px; font-weight: bold; color: #1f2937;">${totalParticipants}</div>
+                    <div style="font-size: 14px; color: #6b7280;">Total Participants</div>
                   </div>
-                  <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f3f4f6;">
-                    <span style="color: #374151; font-weight: 500;">Status:</span>
-                    <span style="color: ${
-                      result.isCompleted ? '#10b981' : '#ef4444'
-                    }; font-weight: 600;">${
-          result.isCompleted ? '✅ Completed' : '❌ Incomplete'
-        }</span>
+                  <div style="text-align: center; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                    <div style="font-size: 24px; font-weight: bold; color: #1f2937;">${averageScore.toFixed(1)}%</div>
+                    <div style="font-size: 14px; color: #6b7280;">Average Score</div>
                   </div>
-                  <div style="display: flex; justify-content: space-between; padding: 8px 0;">
-                    <span style="color: #374151; font-weight: 500;">Submitted:</span>
-                    <span style="color: #1f2937; font-weight: 600;">${new Date(
-                      result.endTime
-                    ).toLocaleString('en-GB')}</span>
+                  <div style="text-align: center; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                    <div style="font-size: 24px; font-weight: bold; color: #10b981;">${highestScore.toFixed(1)}%</div>
+                    <div style="font-size: 14px; color: #6b7280;">Highest Score</div>
+                  </div>
+                  <div style="text-align: center; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                    <div style="font-size: 24px; font-weight: bold; color: #ef4444;">${lowestScore.toFixed(1)}%</div>
+                    <div style="font-size: 14px; color: #6b7280;">Lowest Score</div>
                   </div>
                 </div>
               </div>
-              
-              <div style="background: ${
-                result.percentage >= 70
-                  ? '#d1fae5'
-                  : result.percentage >= 50
-                  ? '#fef3c7'
-                  : '#fee2e2'
-              }; padding: 20px; border-radius: 8px; border-left: 4px solid ${
-          result.percentage >= 70
-            ? '#10b981'
-            : result.percentage >= 50
-            ? '#f59e0b'
-            : '#ef4444'
-        }; margin-bottom: 25px;">
-                <p style="margin: 0; color: ${
-                  result.percentage >= 70
-                    ? '#065f46'
-                    : result.percentage >= 50
-                    ? '#92400e'
-                    : '#991b1b'
-                }; font-weight: 500;">
-                  ${
-                    result.percentage >= 70
-                      ? '🎉 Excellent work! You performed very well on this assessment.'
-                      : result.percentage >= 50
-                      ? '👍 Good effort! You passed the assessment.'
-                      : '📚 Keep practicing! Consider reviewing the material and trying again if possible.'
-                  }
-                </p>
+
+              <div style="background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 25px;">
+                <h3 style="color: #333; margin-bottom: 20px; font-size: 20px;">🏆 Leaderboard</h3>
+                <div style="overflow-x: auto;">
+                  <table style="width: 100%; border-collapse: collapse; border-radius: 8px; overflow: hidden;">
+                    <thead></thead>
+                    <tr style="background-color: #374151; color: white;">
+                        <th style="padding: 15px; text-align: center; font-weight: 600;">Rank</th>
+                        <th style="padding: 15px; text-align: left; font-weight: 600;">Student Name</th>
+                        <th style="padding: 15px; text-align: center; font-weight: 600;">Score</th>
+                        <th style="padding: 15px; text-align: center; font-weight: 600;">Percentage</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${createLeaderboardHTML()}
+                    </tbody>
+                  </table>
+                </div>
               </div>
               
               <div style="text-align: center; padding: 25px; background: white; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
                 <p style="margin: 0; color: #666; line-height: 1.6; font-size: 16px;">
-                  Thank you for participating in the assessment! 🙏<br><br>
+                  ${studentResult ? 
+                    (studentResult.percentage >= 70 ? 
+                      '🎉 Congratulations on your excellent performance!' : 
+                      studentResult.percentage >= 50 ? 
+                      '👍 Well done on completing the assessment!' : 
+                      '📚 Keep practicing and you\'ll improve next time!'
+                    ) : 
+                    '📝 We hope to see you participate in future assessments!'
+                  }<br><br>
                   Best regards,<br>
                   <strong style="color: #333; font-size: 18px;">OA Point Team</strong><br>
                   <span style="font-size: 14px; color: #888; font-style: italic;">Online Assessment Platform</span>
@@ -975,7 +1026,12 @@ router.post('/tests/:id/send-results', adminAuth, async (req, res) => {
     await test.save()
 
     res.json({
-      message: `Results sent successfully to ${results.length} students`
+      message: `Overall test results and leaderboard sent successfully to ${allowedStudents.length} students`,
+      details: {
+        totalParticipants: totalParticipants,
+        emailsSent: allowedStudents.length,
+        averageScore: averageScore.toFixed(1) + '%'
+      }
     })
   } catch (error) {
     console.error('Send results error:', error)

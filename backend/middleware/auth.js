@@ -35,15 +35,24 @@ const auth = async (req, res, next) => {
     console.error('Auth Middleware: Error stack:', error.stack);
     
     let message = 'Token is not valid';
+    let statusCode = 401;
+    
     if (error.name === 'TokenExpiredError') {
       message = 'Token has expired. Please login again.';
     } else if (error.name === 'JsonWebTokenError') {
       message = 'Invalid token format.';
     } else if (error.name === 'NotBeforeError') {
       message = 'Token not active yet.';
+    } else if (error.name === 'MongoServerSelectionError' || error.message.includes('connection')) {
+      message = 'Database connection error. Please try again.';
+      statusCode = 503; // Service Unavailable
+      console.error('Auth Middleware: MongoDB connection issue detected');
+    } else if (error.name === 'MongoTimeoutError') {
+      message = 'Database timeout. Please try again.';
+      statusCode = 503;
     }
     
-    res.status(401).json({ 
+    res.status(statusCode).json({ 
       message, 
       error: error.message,
       type: error.name 
@@ -114,13 +123,22 @@ const studentAuth = async (req, res, next) => {
     console.error('Student Auth Middleware - Error:', error.message);
     
     let message = 'Authorization failed';
+    let statusCode = 401;
+    
     if (error.name === 'TokenExpiredError') {
       message = 'Your session has expired. Please login again.';
     } else if (error.name === 'JsonWebTokenError') {
       message = 'Invalid authentication token.';
+    } else if (error.name === 'MongoServerSelectionError' || error.message.includes('connection')) {
+      message = 'Database connection error. Please try again.';
+      statusCode = 503; // Service Unavailable
+      console.error('Student Auth Middleware: MongoDB connection issue detected');
+    } else if (error.name === 'MongoTimeoutError') {
+      message = 'Database timeout. Please try again.';
+      statusCode = 503;
     }
     
-    res.status(401).json({ 
+    res.status(statusCode).json({ 
       message, 
       error: error.message,
       type: error.name 

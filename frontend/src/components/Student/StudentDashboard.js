@@ -330,7 +330,7 @@ const StudentDashboard = () => {
               />
               <div>
                 <h1 className='text-2xl font-bold text-gray-900'>
-                  <span className='text-primary-600'>OA Point</span> Student
+                  <span className='text-primary-600'>OA Point</span>
                 </h1>
                 <p className='text-gray-600'>Welcome back, {user.name}</p>
               </div>
