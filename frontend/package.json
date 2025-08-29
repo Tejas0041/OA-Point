@@ -23,9 +23,10 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "npx react-scripts build",
+    "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "postinstall": "chmod +x node_modules/.bin/* || true"
   },
   "eslintConfig": {
     "extends": [
@@ -34,7 +35,7 @@
     ]
   },
   "engines": {
-    "node": ">=16.0.0",
+    "node": "18.17.0",
     "npm": ">=8.0.0"
   },
   "browserslist": {
