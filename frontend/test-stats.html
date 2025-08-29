@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Statistics API</title>
+</head>
+<body>
+    <h1>Test Statistics API</h1>
+    <button onclick="testLogin()">Test Login</button>
+    <button onclick="testStats()">Test Statistics</button>
+    <div id="results"></div>
+
+    <script>
+        let token = localStorage.getItem('token');
+
+        async function testLogin() {
+            try {
+                const response = await fetch('http://localhost:5000/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        email: 'tejaspawar70238@gmail.com',
+                        password: 'password123' // Replace with actual password
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.token) {
+                    token = data.token;
+                    localStorage.setItem('token', token);
+                    document.getElementById('results').innerHTML = '<p>Login successful! Token saved.</p>';
+                } else {
+                    document.getElementById('results').innerHTML = '<p>Login failed: ' + JSON.stringify(data) + '</p>';
+                }
+            } catch (error) {
+                document.getElementById('results').innerHTML = '<p>Login error: ' + error.message + '</p>';
+            }
+        }
+
+        async function testStats() {
+            if (!token) {
+                document.getElementById('results').innerHTML = '<p>Please login first</p>';
+                return;
+            }
+
+            try {
+                const response = await fetch('http://localhost:5000/api/student/statistics', {
+                    headers: {
+                        'Authorization': 'Bearer ' + token
+                    }
+                });
+                
+                const data = await response.json();
+                document.getElementById('results').innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+            } catch (error) {
+                document.getElementById('results').innerHTML = '<p>Statistics error: ' + error.message + '</p>';
+            }
+        }
+    </script>
+</body>
+</html>

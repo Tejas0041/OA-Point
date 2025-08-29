@@ -1,0 +1,138 @@
+/* Test Interface Styles */
+.fullscreen-test {
+  overflow: hidden;
+}
+
+.no-select {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+.no-context-menu {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -khtml-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+/* Prevent text selection in test mode */
+.fullscreen-test * {
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+}
+
+/* Allow text selection in code editor */
+.fullscreen-test .monaco-editor * {
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+}
+
+/* Ensure proper scrolling for question content */
+.question-content {
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+}
+
+/* Improve option visibility */
+.option-card {
+  transition: all 0.2s ease;
+  border: 2px solid transparent;
+}
+
+.option-card:hover {
+  border-color: #e5e7eb;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.option-card.selected {
+  border-color: #3b82f6;
+  background-color: #eff6ff;
+}
+
+/* Code editor improvements */
+.monaco-editor {
+  border-radius: 0 !important;
+}
+
+/* Webcam styles */
+.webcam-container {
+  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.1);
+}
+
+/* Question palette improvements */
+.question-palette {
+  backdrop-filter: blur(8px);
+  background: rgba(31, 41, 55, 0.95);
+  transition: all 0.3s ease;
+  border: none;
+  border-right: 1px solid rgba(75, 85, 99, 0.3);
+}
+
+.question-palette:hover {
+  background: rgba(31, 41, 55, 0.98);
+}
+
+/* Hide scrollbar but keep functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;  /* Internet Explorer 10+ */
+  scrollbar-width: none;  /* Firefox */
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;  /* Safari and Chrome */
+}
+
+/* Bottom navigation spacing */
+.test-content {
+  padding-bottom: 80px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .question-palette {
+    position: relative;
+    transform: none;
+    left: auto;
+    top: auto;
+    max-width: 100%;
+    margin-bottom: 1rem;
+  }
+  
+  .question-palette .flex-col {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  
+  .webcam-container {
+    width: 150px !important;
+    height: 112px !important;
+  }
+}
+
+/* Improve scrollbar styling */
+.test-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.test-content::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.test-content::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+.test-content::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
