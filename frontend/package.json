@@ -23,7 +23,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "react-scripts build",
+    "build": "npx react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
@@ -32,6 +32,10 @@
       "react-app",
       "react-app/jest"
     ]
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
   },
   "browserslist": {
     "production": [
