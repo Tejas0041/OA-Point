@@ -2,11 +2,40 @@ const express = require('express');
 const { studentAuth } = require('../middleware/auth');
 const Test = require('../models/Test');
 const axios = require('axios');
+const crypto = require('crypto');
+
+// Simple in-memory cache to prevent duplicate API calls
+const compilationCache = new Map();
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+// Generate cache key for code and input
+const getCacheKey = (code, input) => {
+  return crypto.createHash('md5').update(code + (input || '')).digest('hex');
+};
 
 const router = express.Router();
 
+// Clean up expired cache entries periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of compilationCache.entries()) {
+    if (now - value.timestamp > CACHE_DURATION) {
+      compilationCache.delete(key);
+    }
+  }
+}, 60000); // Clean up every minute
+
 // Use Judge0 API for C++ compilation and execution
 const compileCpp = async (code, input) => {
+  // Check cache first
+  const cacheKey = getCacheKey(code, input);
+  const cached = compilationCache.get(cacheKey);
+  
+  if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
+    console.log('Using cached compilation result');
+    return cached.result;
+  }
+  
   try {
     // Judge0 API endpoint (you can use the free tier)
     const JUDGE0_API = 'https://judge0-ce.p.rapidapi.com';
@@ -34,7 +63,7 @@ const compileCpp = async (code, input) => {
     const maxAttempts = 10;
     
     do {
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+      await new Promise(resolve => setTimeout(resolve, 1500)); // Wait 1.5 seconds to avoid rate limits
       
       const resultResponse = await axios.get(`${JUDGE0_API}/submissions/${token}`, {
         headers: {
@@ -101,15 +130,35 @@ const compileCpp = async (code, input) => {
     }
     
     // Default case
-    return {
+    const finalResult = {
       success: true,
       error: null,
       output: stdout.trim(),
       executionTime: parseFloat(result.time) * 1000 || 0
     };
     
+    // Cache the result
+    compilationCache.set(cacheKey, {
+      result: finalResult,
+      timestamp: Date.now()
+    });
+    
+    return finalResult;
+    
   } catch (error) {
     console.error('Judge0 API error:', error.message);
+    
+    // Check for rate limiting errors
+    if (error.response?.status === 429) {
+      console.error('Judge0 API rate limit exceeded, using fallback compiler');
+      return await fallbackCompiler(code, input);
+    }
+    
+    // Check for quota exceeded
+    if (error.response?.status === 402 || error.message.includes('quota')) {
+      console.error('Judge0 API quota exceeded, using fallback compiler');
+      return await fallbackCompiler(code, input);
+    }
     
     // Fallback to local simulation if API fails
     return await fallbackCompiler(code, input);
@@ -153,12 +202,21 @@ const fallbackCompiler = async (code, input) => {
     // Simulate execution
     const output = simulateExecution(code, input);
     
-    return {
+    const result = {
       success: true,
       error: null,
       output: output,
       executionTime: Math.random() * 100 + 50
     };
+    
+    // Cache the fallback result too
+    const cacheKey = getCacheKey(code, input);
+    compilationCache.set(cacheKey, {
+      result: result,
+      timestamp: Date.now()
+    });
+    
+    return result;
     
   } catch (error) {
     return {

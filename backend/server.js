@@ -9,6 +9,8 @@ const adminRoutes = require('./routes/admin')
 const studentRoutes = require('./routes/student')
 const testRoutes = require('./routes/test')
 const compilerRoutes = require('./routes/compiler')
+const requestLogger = require('./middleware/requestLogger')
+const rateLimitPrevention = require('./middleware/rateLimitPrevention')
 
 const app = express()
 
@@ -22,6 +24,12 @@ app.use(
 )
 
 // Rate limiting removed to prevent 429 errors during development
+
+// Rate limit prevention middleware
+app.use(rateLimitPrevention)
+
+// Request logging middleware
+app.use(requestLogger)
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }))
@@ -44,6 +52,31 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
   })
+})
+
+// Global error handler
+app.use((error, req, res, next) => {
+  console.error('Global error handler:', error);
+  
+  // Prevent 429 errors by default
+  if (error.status === 429 || error.statusCode === 429) {
+    console.error('🚨 429 ERROR CAUGHT IN GLOBAL HANDLER:', error);
+    return res.status(500).json({ 
+      message: 'Server temporarily unavailable. Please try again.',
+      error: 'Rate limiting disabled'
+    });
+  }
+  
+  // Default error response
+  res.status(error.status || 500).json({
+    message: error.message || 'Internal server error',
+    ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+  });
+})
+
+// 404 handler
+app.use('*', (req, res) => {
+  res.status(404).json({ message: 'Route not found' });
 })
 
 // MongoDB connection with improved configuration

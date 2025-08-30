@@ -25,6 +25,19 @@ const TestInterface = () => {
   const { id: testId } = useParams()
   const navigate = useNavigate()
   const webcamRef = useRef(null)
+  
+  // Custom warning toast function
+  const showWarningToast = (message, options = {}) => {
+    return toast(message, {
+      icon: '⚠️',
+      style: {
+        background: '#f59e0b',
+        color: '#fff',
+      },
+      duration: 3000,
+      ...options
+    })
+  }
   const [test, setTest] = useState(null)
   const [attempt, setAttempt] = useState(null)
   const [currentSection, setCurrentSection] = useState(0)
@@ -36,7 +49,7 @@ const TestInterface = () => {
   const [error, setError] = useState(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [webcamEnabled, setWebcamEnabled] = useState(true)
-  const [webcamCollapsed, setWebcamCollapsed] = useState(true)
+  const [webcamCollapsed, setWebcamCollapsed] = useState(true) // Initially collapsed, will show when test starts
   const [customInput, setCustomInput] = useState('')
   const [customOutput, setCustomOutput] = useState('')
   const [code, setCode] = useState('')
@@ -46,6 +59,7 @@ const TestInterface = () => {
   const [showSectionModal, setShowSectionModal] = useState(false)
   const [showSubmitModal, setShowSubmitModal] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isTransitioning, setIsTransitioning] = useState(false)
 
   // Function declarations (moved before useEffect to avoid hoisting issues)
   const submitAnswer = useCallback(
@@ -130,26 +144,80 @@ const TestInterface = () => {
   }, [handleTestSubmit, isSubmitting])
 
   const handleSectionComplete = useCallback(async () => {
-    if (isSubmitting) return // Prevent multiple submissions
+    if (isSubmitting || isTransitioning) return // Prevent multiple submissions
+    
+    // Check if test data is available
+    if (!test || !test.sections || !test.sections[currentSection]) {
+      console.error('Test data not available for section completion')
+      toast.error('Unable to complete section - test data not loaded')
+      return
+    }
     
     try {
+      setIsTransitioning(true)
+      
+      // First, submit any unsaved answers from current section
+      const currentSectionName = test.sections[currentSection]?.name || 'Current Section'
+      console.log('Auto-completing section:', currentSectionName)
+      console.log('Submitting current section answers before moving to next section...')
+      const submitPromises = []
+
+      // Submit any unsaved answers
+      Object.keys(answers).forEach(questionId => {
+        const answer = answers[questionId]
+        if (answer) {
+          console.log('Auto-submitting answer for question:', questionId, answer)
+          submitPromises.push(submitAnswer(questionId, answer))
+        }
+      })
+
+      // Wait for all answers to be submitted
+      if (submitPromises.length > 0) {
+        await Promise.all(submitPromises)
+        console.log('All section answers submitted')
+        // Small delay to ensure database writes complete
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+
+      // Complete the section
       await axios.post(API_ENDPOINTS.STUDENT_TEST_COMPLETE_SECTION(testId), {
         sectionId: test.sections[currentSection]._id
       })
 
       if (currentSection < test.sections.length - 1) {
-        setCurrentSection(prev => prev + 1)
+        const nextSectionName = test.sections[currentSection + 1]?.name || 'Next Section'
+        console.log(`Moving from section ${currentSection} to section ${currentSection + 1}`)
+        
+        // Update section and reset question
+        const nextSectionIndex = currentSection + 1
+        setCurrentSection(nextSectionIndex)
         setCurrentQuestion(0)
-        setSectionTimeLeft(test.sections[currentSection + 1].timeLimit * 60)
-        toast.success('Section completed. Moving to next section.')
+        setSectionTimeLeft(test.sections[nextSectionIndex]?.timeLimit * 60 || 0)
+        
+        // Clear code editor for new section
+        setCode('')
+        setCodeOutput('')
+        setCustomInput('')
+        setCustomOutput('')
+        
+        toast.success(`Moved to "${nextSectionName}" section. Your previous answers have been saved.`, {
+          duration: 4000
+        })
+        
+        // Small delay before clearing transition state
+        setTimeout(() => {
+          setIsTransitioning(false)
+        }, 1000)
       } else {
+        console.log('No more sections, auto-submitting test')
         handleTestSubmit()
       }
     } catch (error) {
       console.error('Error completing section:', error)
       toast.error('Failed to complete section')
+      setIsTransitioning(false)
     }
-  }, [testId, test, currentSection, handleTestSubmit, isSubmitting])
+  }, [testId, test, currentSection, handleTestSubmit, isSubmitting, isTransitioning, answers, submitAnswer])
 
   const reportViolation = useCallback(async (type, description) => {
     try {
@@ -286,6 +354,8 @@ const TestInterface = () => {
         setCurrentSection(sectionIndex)
 
         setTestStarted(true)
+        setWebcamEnabled(true)
+        setWebcamCollapsed(false) // Show webcam video when resuming test (button will show "Hide")
         calculateTimeLeft(testData, attempt)
       } else {
         // Initialize with first section
@@ -446,29 +516,71 @@ const TestInterface = () => {
   useEffect(() => {
     let timerInterval = null
     
-    if (testStarted && (timeLeft > 0 || sectionTimeLeft > 0)) {
+    if (testStarted && (timeLeft > 0 || sectionTimeLeft > 0) && test && test.sections && !isTransitioning) {
       timerInterval = setInterval(() => {
         // Update section time
         setSectionTimeLeft(prev => {
-          if (prev <= 1 && !isSubmitting) {
+          if (prev === 1 && !isSubmitting) {
             // Section time is up, move to next section or submit test
-            if (currentSection < test.sections.length - 1) {
-              toast.error('Section time is up! Moving to next section...')
+            if (test && test.sections && currentSection < test.sections.length - 1) {
+              const currentSectionName = test.sections[currentSection]?.name || 'Current Section'
+              const nextSectionName = test.sections[currentSection + 1]?.name || 'Next Section'
+              toast.error(`Section "${currentSectionName}" time is up! Moving to "${nextSectionName}" section...`, {
+                duration: 4000
+              })
               setTimeout(() => handleSectionComplete(), 1000)
             } else {
-              toast.error('Test time is up! Auto-submitting...')
-              setTimeout(() => handleAutoSubmit(), 1000)
+              const currentSectionName = test.sections[currentSection]?.name || 'Final Section'
+              toast.error(`Section "${currentSectionName}" time is up! Auto-submitting test...`, {
+                duration: 4000
+              })
+              setTimeout(() => handleSectionComplete(), 1000)
             }
             return 0
           }
+          if (prev <= 0) {
+            return 0
+          }
+          
+          // Warning when 5 minutes left in section (only for sections longer than 10 minutes)
+          if (prev === 300 && !isSubmitting && test?.sections?.[currentSection]?.timeLimit > 10) {
+            const sectionName = test.sections[currentSection]?.name || 'Current Section'
+            showWarningToast(`⏰ 5 minutes remaining in "${sectionName}" section`)
+          }
+          
+          // Warning when 30 seconds left in section
+          if (prev === 30 && !isSubmitting) {
+            if (test && test.sections && currentSection < test.sections.length - 1) {
+              const sectionName = test.sections[currentSection]?.name || 'Current Section'
+              showWarningToast(`⚠️ Only 30 seconds left in "${sectionName}" section!`, {
+                icon: '🚨',
+                style: {
+                  background: '#dc2626',
+                  color: '#fff',
+                }
+              })
+            } else {
+              showWarningToast('⚠️ Only 30 seconds left in final section!', {
+                icon: '🚨',
+                style: {
+                  background: '#dc2626',
+                  color: '#fff',
+                }
+              })
+            }
+          }
+          
           return prev - 1
         })
         
         // Update total time
         setTimeLeft(prev => {
-          if (prev <= 1 && !isSubmitting) {
+          if (prev === 1 && !isSubmitting) {
             toast.error('Test time is up! Auto-submitting...')
             setTimeout(() => handleAutoSubmit(), 1000)
+            return 0
+          }
+          if (prev <= 0) {
             return 0
           }
           return prev - 1
@@ -481,7 +593,7 @@ const TestInterface = () => {
         clearInterval(timerInterval)
       }
     }
-  }, [testStarted, timeLeft, sectionTimeLeft, currentSection, test, handleAutoSubmit, handleSectionComplete, isSubmitting])
+  }, [testStarted, timeLeft, sectionTimeLeft, currentSection, test, handleAutoSubmit, handleSectionComplete, isSubmitting, isTransitioning, showWarningToast])
 
 
 
@@ -501,8 +613,9 @@ const TestInterface = () => {
         }
       }
 
-      // Start webcam - always enabled in background
+      // Start webcam - always enabled in background and show video by default
       setWebcamEnabled(true)
+      setWebcamCollapsed(false) // Show webcam video by default when test starts (button will show "Hide")
 
       const browserInfo = {
         userAgent: navigator.userAgent,
@@ -824,10 +937,27 @@ const TestInterface = () => {
               <span className='font-medium'>Total Questions:</span>
               <span>
                 {test.sections.reduce(
-                  (total, section) => total + section.questions.length,
+                  (total, section) => total + (section?.questions?.length || 0),
                   0
                 )}
               </span>
+            </div>
+          </div>
+
+          {/* Section-wise breakdown */}
+          <div className='bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6'>
+            <h3 className='font-medium text-blue-800 mb-3'>Section Breakdown</h3>
+            <div className='space-y-2'>
+              {test.sections.map((section, index) => (
+                <div key={index} className='flex justify-between items-center text-sm'>
+                  <span className='text-blue-700 font-medium'>
+                    {section?.name || `Section ${index + 1}`}:
+                  </span>
+                  <span className='text-blue-600'>
+                    {section?.questions?.length || 0} questions • {section?.timeLimit || 0} minutes
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -883,7 +1013,23 @@ const TestInterface = () => {
   }
 
   const currentQuestionData = getCurrentQuestion()
-  const section = test.sections[currentSection]
+  const section = test?.sections?.[currentSection]
+
+  // Safety check to prevent rendering when section data is not available or transitioning
+  if (testStarted && (isTransitioning || !test || !test.sections || !section || !currentQuestionData)) {
+    const message = isTransitioning ? 'Transitioning to next section...' : 'Loading Section...'
+    const subMessage = isTransitioning ? 'Please wait while we prepare the next section' : 'Please wait while we load the test section'
+    
+    return (
+      <div className='min-h-screen flex items-center justify-center bg-gray-50'>
+        <div className='text-center'>
+          <div className='animate-spin rounded-full h-16 w-16 border-b-2 border-primary-600 mx-auto mb-4'></div>
+          <h2 className='text-xl font-semibold text-gray-900 mb-2'>{message}</h2>
+          <p className='text-gray-600'>{subMessage}</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -924,7 +1070,7 @@ const TestInterface = () => {
             <h1 className='text-lg font-semibold'>{test.title}</h1>
           </div>
           <div className='text-sm'>
-            Section: {section.name} ({currentSection + 1}/{test.sections.length}
+            Section: {section?.name || `Section ${currentSection + 1}`} ({currentSection + 1}/{test.sections.length}
             )
           </div>
         </div>
@@ -971,8 +1117,8 @@ const TestInterface = () => {
           style={{ height: '100%' }}
         >
           <div className='flex flex-col space-y-1'>
-            {section.questions.map((_, index) => {
-              const questionStatus = answers[section.questions[index]._id]
+            {section?.questions?.map((_, index) => {
+              const questionStatus = answers[section?.questions?.[index]?._id]
                 ? 'bg-green-500 hover:bg-green-600'
                 : currentQuestion === index
                 ? 'bg-blue-500 hover:bg-blue-600'
@@ -984,13 +1130,13 @@ const TestInterface = () => {
                   onClick={() => setCurrentQuestion(index)}
                   className={`h-7 w-7 rounded flex items-center justify-center text-xs font-medium text-white ${questionStatus} transition-colors mx-auto`}
                   title={`Question ${index + 1}${
-                    answers[section.questions[index]._id] ? ' (Answered)' : ''
+                    answers[section?.questions?.[index]?._id] ? ' (Answered)' : ''
                   }`}
                 >
                   {index + 1}
                 </button>
               )
-            })}
+            }) || []}
           </div>
         </div>
       </div>
@@ -1004,7 +1150,7 @@ const TestInterface = () => {
             {/* Question Header */}
             <div className='flex justify-between items-center mb-6'>
               <div className='text-sm text-gray-600'>
-                Question {currentQuestion + 1} of {section.questions.length} |
+                Question {currentQuestion + 1} of {section?.questions?.length || 0} |
                 Section {currentSection + 1} of {test.sections.length}
               </div>
               <div className='flex items-center space-x-2'>
@@ -1026,10 +1172,10 @@ const TestInterface = () => {
             {/* Question Content */}
             <div className='bg-white border rounded-lg p-6 question-content'>
               <h2 className='text-xl font-semibold mb-4'>
-                {currentQuestionData.questionText}
+                {currentQuestionData?.questionText || 'Loading question...'}
               </h2>
 
-              {currentQuestionData.questionImage && (
+              {currentQuestionData?.questionImage && (
                 <div className='mb-4'>
                   <img
                     src={currentQuestionData.questionImage}
@@ -1040,9 +1186,9 @@ const TestInterface = () => {
               )}
 
               {/* MCQ Questions */}
-              {currentQuestionData.questionType !== 'coding' && (
+              {currentQuestionData?.questionType !== 'coding' && (
                 <div className='space-y-4 mb-8'>
-                  {currentQuestionData.options.map((option, index) => {
+                  {currentQuestionData?.options?.map((option, index) => {
                     const isSelected =
                       answers[
                         currentQuestionData._id
@@ -1111,13 +1257,13 @@ const TestInterface = () => {
               )}
 
               {/* Coding Questions */}
-              {currentQuestionData.questionType === 'coding' && (
+              {currentQuestionData?.questionType === 'coding' && (
                 <div className='space-y-6'>
                   {/* Problem Statement */}
                   <div>
                     <h3 className='font-semibold mb-2'>Problem Statement</h3>
                     <p className='text-gray-700 whitespace-pre-wrap'>
-                      {currentQuestionData.codingDetails.problemStatement}
+                      {currentQuestionData?.codingDetails?.problemStatement || 'Loading problem statement...'}
                     </p>
                   </div>
 
@@ -1126,13 +1272,13 @@ const TestInterface = () => {
                     <div>
                       <h3 className='font-semibold mb-2'>Input Format</h3>
                       <p className='text-gray-700 text-sm whitespace-pre-wrap'>
-                        {currentQuestionData.codingDetails.inputFormat}
+                        {currentQuestionData?.codingDetails?.inputFormat || 'Loading input format...'}
                       </p>
                     </div>
                     <div>
                       <h3 className='font-semibold mb-2'>Output Format</h3>
                       <p className='text-gray-700 text-sm whitespace-pre-wrap'>
-                        {currentQuestionData.codingDetails.outputFormat}
+                        {currentQuestionData?.codingDetails?.outputFormat || 'Loading output format...'}
                       </p>
                     </div>
                   </div>
@@ -1140,7 +1286,7 @@ const TestInterface = () => {
                   {/* Examples */}
                   <div>
                     <h3 className='font-semibold mb-2'>Examples</h3>
-                    {currentQuestionData.codingDetails.examples.map(
+                    {(currentQuestionData?.codingDetails?.examples || []).map(
                       (example, index) => (
                         <div
                           key={index}
@@ -1179,7 +1325,7 @@ const TestInterface = () => {
                   <div>
                     <h3 className='font-semibold mb-2'>Constraints</h3>
                     <p className='text-gray-700 text-sm whitespace-pre-wrap'>
-                      {currentQuestionData.codingDetails.constraints}
+                      {currentQuestionData?.codingDetails?.constraints || 'Loading constraints...'}
                     </p>
                   </div>
                 </div>
@@ -1203,7 +1349,7 @@ const TestInterface = () => {
                 </button>
 
                 <div className='flex items-center space-x-2'>
-                  {currentQuestion < section.questions.length - 1 ? (
+                  {currentQuestion < (section?.questions?.length || 0) - 1 ? (
                     <button
                       onClick={() => {
                         // Save current answer and move to next
@@ -1242,7 +1388,7 @@ const TestInterface = () => {
         </div>
 
         {/* Code Editor (for coding questions) */}
-        {currentQuestionData.questionType === 'coding' && (
+        {currentQuestionData?.questionType === 'coding' && (
           <div
             className='w-1/2 border-l bg-gray-50 flex flex-col'
             style={{ height: 'calc(100vh - 64px)' }}
